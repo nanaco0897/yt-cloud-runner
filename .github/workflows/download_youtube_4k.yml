@@ -1,0 +1,76 @@
+name: YouTube 4K Cloud Downloader (Zero Proxy Traffic)
+
+on:
+  workflow_dispatch:
+    inputs:
+      youtube_url:
+        description: 'YouTube 视频链接'
+        required: true
+        default: 'https://www.youtube.com/watch?v=NzzdyORdg80'
+      resolution:
+        description: '最高画质 (2160p = 4K, 1080p = 1080p)'
+        required: true
+        default: '2160'
+        type: choice
+        options:
+          - '2160'
+          - '1440'
+          - '1080'
+          - '720'
+
+jobs:
+  download-and-deliver:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python & Dependencies
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install yt-dlp & FFmpeg
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          pip install --upgrade yt-dlp
+
+      - name: Download 4K Video on Azure Gigabit Backbone (0 Proxy Traffic)
+        run: |
+          echo "========================================="
+          echo "🚀 正在通过微软 Azure 万兆骨干网下载 4K 视频..."
+          echo "========================================="
+          mkdir -p output
+          yt-dlp \
+            -f "bestvideo[height<=${{ inputs.resolution }}]+bestaudio/bestvideo+bestaudio/best" \
+            --merge-output-format mp4 \
+            --write-sub --write-auto-sub --sub-lang "en.*,zh.*" \
+            --write-thumbnail \
+            -o "output/%(title)s.%(ext)s" \
+            "${{ inputs.youtube_url }}"
+
+          echo "========================================="
+          echo "✅ 下载完成！输出文件清单："
+          ls -lh output/
+          echo "========================================="
+
+      - name: Upload to GitHub Artifacts (Free & High Speed)
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-4k-video
+          path: output/
+          retention-days: 7
+
+      - name: Upload to Free Fast Delivery (GoFile & WeTransfer Link)
+        run: |
+          echo "========================================="
+          echo "📦 正在生成免翻国内直连高速下载链接..."
+          VIDEO_FILE=$(find output -name "*.mp4" -o -name "*.webm" | head -n 1)
+          if [ -f "$VIDEO_FILE" ]; then
+            echo "正在上传到快速分发通道..."
+            # 上传到 transfer.sh / gofile
+            curl -F "file=@$VIDEO_FILE" https://temp.sh/upload || true
+          fi
+          echo "========================================="
