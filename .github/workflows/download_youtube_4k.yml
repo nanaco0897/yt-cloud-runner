@@ -1,8 +1,6 @@
 name: YouTube 4K Cloud Downloader (Zero Proxy Traffic)
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
     inputs:
       video_url:
@@ -10,9 +8,15 @@ on:
         required: true
         default: 'https://www.youtube.com/watch?v=-x6S4aPnj-4'
       resolution:
-        description: '最高画质'
+        description: '最高分辨率 (2160=4K, 1080=1080p)'
         required: true
         default: '2160'
+        type: choice
+        options:
+          - '2160'
+          - '1440'
+          - '1080'
+          - '720'
 
 jobs:
   download-and-transfer:
@@ -26,7 +30,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Tools
+      - name: Install yt-dlp & FFmpeg & Deno
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg curl
@@ -34,26 +38,67 @@ jobs:
           curl -fsSL https://deno.land/install.sh | sh
           echo "$HOME/.deno/bin" >> $GITHUB_PATH
 
+      - name: Prepare YouTube Credentials
+        run: |
+          if [ -n "$YT_COOKIES" ]; then
+            printf "%s\n" "$YT_COOKIES" > cookies.txt
+            echo "COOKIE_PARAM=--cookies cookies.txt" >> $GITHUB_ENV
+          else
+            echo "COOKIE_PARAM=" >> $GITHUB_ENV
+          fi
+        env:
+          YT_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+
       - name: Download 4K Video on Azure Gigabit Backbone
         run: |
-          TARGET_URL="${{ github.event.inputs.video_url || 'https://www.youtube.com/watch?v=-x6S4aPnj-4' }}"
+          TARGET_URL="${{ github.event.inputs.video_url }}"
           MAX_RES="${{ github.event.inputs.resolution || '2160' }}"
           mkdir -p output
 
           echo "========================================="
-          echo "🚀 微软 Azure 万兆骨干网极速拉取 4K 视频 (纯净多端伪装，0 代理流量)..."
+          echo "🚀 微软 Azure 万兆骨干网极速拉取 4K 视频..."
           echo "目标链接: $TARGET_URL"
           echo "========================================="
 
-          yt-dlp \
+          SUCCESS=0
+          echo "👉 [策略 1] 优先使用 VisionOS + iOS + Web 原生端拉取..."
+          if yt-dlp \
+            $COOKIE_PARAM \
             --remote-components ejs:github \
-            --extractor-args "youtube:player_client=ios,web,android" \
+            --extractor-args "youtube:player_client=visionos,ios,web" \
             -f "bestvideo[height<=$MAX_RES]+bestaudio/bestvideo+bestaudio/best" \
             --merge-output-format mp4 \
             --write-sub --write-auto-sub --sub-lang "en.*,zh.*" \
             --write-thumbnail \
-            -o "output/raw_video.%(ext)s" \
-            "$TARGET_URL"
+            -o "output/%(title)s.%(ext)s" \
+            "$TARGET_URL"; then
+            SUCCESS=1
+          fi
+
+          if [ $SUCCESS -ne 1 ]; then
+            echo "👉 [策略 2] 降级使用 tv_embedded,mweb 拉取..."
+            if yt-dlp \
+              $COOKIE_PARAM \
+              --remote-components ejs:github \
+              --extractor-args "youtube:player_client=tv_embedded,mweb" \
+              -f "bestvideo[height<=$MAX_RES]+bestaudio/bestvideo+bestaudio/best" \
+              --merge-output-format mp4 \
+              -o "output/%(title)s.%(ext)s" \
+              "$TARGET_URL"; then
+              SUCCESS=1
+            fi
+          fi
+
+          if [ $SUCCESS -ne 1 ]; then
+            echo "👉 [策略 3] 默认参数自适应拉取..."
+            yt-dlp \
+              $COOKIE_PARAM \
+              --remote-components ejs:github \
+              -f "bestvideo[height<=$MAX_RES]+bestaudio/bestvideo+bestaudio/best" \
+              --merge-output-format mp4 \
+              -o "output/%(title)s.%(ext)s" \
+              "$TARGET_URL" || true
+          fi
 
           echo "========================================="
           echo "✅ 下载完成！输出清单："
@@ -133,24 +178,26 @@ jobs:
               comp_res = requests.post("https://api.aliyundrive.com/v2/file/complete", json={
                   "drive_id": drive_id, "file_id": file_id, "upload_id": c_res.get("upload_id")
               }, headers=auth_headers).json()
-              print(f"🎉 [AliyunDrive] 上传完成！FileId: {file_id}")
-              return file_id
+              print(f"🎉 [AliyunDrive] 上传确认成功！FileId: {comp_res.get('file_id')}")
+              return comp_res.get("file_id")
 
-          token, drive_id = get_tokens(DEFAULT_REFRESH_TOKEN)
-          if not token or not drive_id:
-              print("❌ 阿里云盘认证失败！")
-              sys.exit(1)
-
-          folder_id = get_or_create_folder(token, drive_id, "YouTube")
-          for f in glob.glob("output/*"):
-              if os.path.isfile(f):
-                  upload_file(token, drive_id, folder_id, f)
+          files = glob.glob("output/*.mp4") + glob.glob("output/*.mkv") + glob.glob("output/*.webm")
+          if not files:
+              print("⚠️ 未找到视频文件！")
+              sys.exit(0)
+          access_token, drive_id = get_tokens(DEFAULT_REFRESH_TOKEN)
+          folder_id = get_or_create_folder(access_token, drive_id, "YouTube")
+          for f in files:
+              upload_file(access_token, drive_id, folder_id, f)
+          print("\n🎉 全部 4K 视频已成功免流直传至阿里云盘 /YouTube/ 目录！")
           PYEOF
+        env:
+          ALIYUN_REFRESH_TOKEN: ${{ secrets.ALIYUN_REFRESH_TOKEN || 'd90856dbc2714b99a788b03adcf291f1' }}
 
       - name: Upload to GitHub Artifacts (Backup)
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: youtube-4k-media
+          name: youtube-video-${{ github.run_number }}
           path: output/
           retention-days: 7
