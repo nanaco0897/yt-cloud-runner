@@ -62,7 +62,7 @@ jobs:
           echo "========================================="
 
           yt-dlp -v \
-            -f "bestvideo[height<=$MAX_RES]+bestaudio/bestvideo+bestaudio/best" \
+            -f "313+251-20/401+140-20/bestvideo[height<=$MAX_RES]+bestaudio[language=en-US]/bestvideo[height<=$MAX_RES]+bestaudio[language=en]/bestvideo[height<=$MAX_RES]+bestaudio/best" \
             --merge-output-format mp4 \
             --write-sub --write-auto-sub --sub-lang "en.*,zh.*" \
             --write-thumbnail \
