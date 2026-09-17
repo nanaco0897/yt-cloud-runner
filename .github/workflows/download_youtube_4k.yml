@@ -1,1 +1,168 @@
-https://www.youtube.com/watch?v=-x6S4aPnj-4
+name: YouTube 4K Cloud Downloader (Zero Proxy Traffic)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'YouTube 视频链接'
+        required: true
+        default: 'https://www.youtube.com/watch?v=-x6S4aPnj-4'
+      resolution:
+        description: '最高画质'
+        required: true
+        default: '2160'
+
+jobs:
+  download-and-transfer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install yt-dlp & FFmpeg & Deno
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg curl
+          pip install --upgrade yt-dlp requests
+          curl -fsSL https://deno.land/install.sh | sh
+          echo "$HOME/.deno/bin" >> $GITHUB_PATH
+
+      - name: Prepare YouTube Credentials
+        run: |
+          if [ -n "$YT_COOKIES" ]; then
+            printf "%s\n" "$YT_COOKIES" > cookies.txt
+            echo "COOKIE_PARAM=--cookies cookies.txt" >> $GITHUB_ENV
+          else
+            echo "COOKIE_PARAM=" >> $GITHUB_ENV
+          fi
+        env:
+          YT_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+
+      - name: Download 4K Video on Azure Gigabit Backbone
+        run: |
+          TARGET_URL="${{ github.event.inputs.video_url || 'https://www.youtube.com/watch?v=-x6S4aPnj-4' }}"
+          MAX_RES="${{ github.event.inputs.resolution || '2160' }}"
+          mkdir -p output
+
+          echo "========================================="
+          echo "🚀 微软 Azure 万兆骨干网极速拉取 4K 视频..."
+          echo "目标链接: $TARGET_URL"
+          echo "========================================="
+
+          yt-dlp \
+            $COOKIE_PARAM \
+            --remote-components ejs:github \
+            --extractor-args "youtube:player_client=ios,web,android" \
+            -f "bestvideo[height<=$MAX_RES]+bestaudio/bestvideo+bestaudio/best" \
+            --merge-output-format mp4 \
+            --write-sub --write-auto-sub --sub-lang "en.*,zh.*" \
+            --write-thumbnail \
+            -o "output/raw_video.%(ext)s" \
+            "$TARGET_URL"
+
+          echo "========================================="
+          echo "✅ 下载完成！输出清单："
+          ls -lh output/
+          echo "========================================="
+
+      - name: Direct Sync to Aliyun Drive (0 Proxy Traffic)
+        run: |
+          python3 - << 'PYEOF'
+          import os, sys, glob, time, json, math, hashlib, base64, requests
+
+          DEFAULT_REFRESH_TOKEN = os.environ.get("ALIYUN_REFRESH_TOKEN", "d90856dbc2714b99a788b03adcf291f1")
+          HEADERS = {
+              "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+              "Referer": "https://www.aliyundrive.com/"
+          }
+
+          def get_tokens(refresh_token):
+              url = "https://auth.aliyundrive.com/v2/account/token"
+              resp = requests.post(url, json={"grant_type": "refresh_token", "refresh_token": refresh_token}, headers=HEADERS).json()
+              return resp.get("access_token"), resp.get("default_drive_id")
+
+          def get_or_create_folder(access_token, drive_id, folder_name="YouTube"):
+              auth_headers = {"Authorization": f"Bearer {access_token}", **HEADERS}
+              list_url = "https://api.aliyundrive.com/adrive/v3/file/list"
+              res = requests.post(list_url, json={"drive_id": drive_id, "parent_file_id": "root", "limit": 100}, headers=auth_headers).json()
+              for item in res.get("items", []):
+                  if item.get("type") == "folder" and item.get("name") == folder_name:
+                      return item.get("file_id")
+              create_url = "https://api.aliyundrive.com/adrive/v2/file/createWithFolders"
+              c_res = requests.post(create_url, json={
+                  "drive_id": drive_id, "parent_file_id": "root", "name": folder_name, "type": "folder", "check_name_mode": "refuse"
+              }, headers=auth_headers).json()
+              return c_res.get("file_id")
+
+          def calculate_proof_code(access_token, file_path):
+              file_size = os.path.getsize(file_path)
+              if file_size == 0: return ""
+              md5_hash = hashlib.md5(access_token.encode("utf-8")).hexdigest()
+              md5_int = int(md5_hash[:16], 16)
+              start = md5_int % file_size
+              end = min(start + 8, file_size)
+              with open(file_path, "rb") as f:
+                  f.seek(start)
+                  block = f.read(end - start)
+              return base64.b64encode(block).decode("utf-8")
+
+          def upload_file(access_token, drive_id, folder_id, file_path, chunk_size=10*1024*1024):
+              auth_headers = {"Authorization": f"Bearer {access_token}", **HEADERS}
+              file_size = os.path.getsize(file_path)
+              file_name = os.path.basename(file_path)
+              print(f"🚀 [AliyunDrive] 开始上传: {file_name} ({file_size/1024/1024:.2f} MB)...")
+              with open(file_path, "rb") as f:
+                  sha1 = hashlib.sha1(f.read()).hexdigest().upper()
+              proof = calculate_proof_code(access_token, file_path)
+              total_parts = math.ceil(file_size / chunk_size)
+              part_list = [{"part_number": i + 1} for i in range(total_parts)]
+              create_payload = {
+                  "drive_id": drive_id, "parent_file_id": folder_id, "name": file_name,
+                  "type": "file", "check_name_mode": "auto_rename", "size": file_size,
+                  "content_hash": sha1, "content_hash_name": "sha1", "proof_code": proof,
+                  "proof_version": "v1", "part_info_list": part_list
+              }
+              c_res = requests.post("https://api.aliyundrive.com/adrive/v2/file/createWithFolders", json=create_payload, headers=auth_headers).json()
+              file_id = c_res.get("file_id")
+              if c_res.get("rapid_upload"):
+                  print(f"⚡️ [AliyunDrive] 极速秒传成功！FileId: {file_id}")
+                  return file_id
+              parts_info = c_res.get("part_info_list", [])
+              with open(file_path, "rb") as f:
+                  for p in parts_info:
+                      p_num = p["part_number"]
+                      u_url = p["upload_url"]
+                      chunk = f.read(chunk_size)
+                      requests.put(u_url, data=chunk)
+                      print(f"[AliyunDrive] 块 {p_num}/{total_parts} 上传成功 ({p_num/total_parts*100:.1f}%)")
+              comp_res = requests.post("https://api.aliyundrive.com/v2/file/complete", json={
+                  "drive_id": drive_id, "file_id": file_id, "upload_id": c_res.get("upload_id")
+              }, headers=auth_headers).json()
+              print(f"🎉 [AliyunDrive] 上传完成！FileId: {file_id}")
+              return file_id
+
+          token, drive_id = get_tokens(DEFAULT_REFRESH_TOKEN)
+          if not token or not drive_id:
+              print("❌ 阿里云盘认证失败！")
+              sys.exit(1)
+
+          folder_id = get_or_create_folder(token, drive_id, "YouTube")
+          for f in glob.glob("output/*"):
+              if os.path.isfile(f):
+                  upload_file(token, drive_id, folder_id, f)
+          PYEOF
+
+      - name: Upload to GitHub Artifacts (Backup)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: youtube-4k-media
+          path: output/
+          retention-days: 7
