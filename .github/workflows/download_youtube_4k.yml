@@ -46,6 +46,29 @@ jobs:
           export PATH="$HOME/.deno/bin:$PATH"
           pip install --upgrade yt-dlp bgutil-ytdlp-pot-provider requests
 
+      - name: Prepare YouTube Cookies
+        run: |
+          cat << 'COOKIEOF' > cookies.txt
+# Netscape HTTP Cookie File
+# http://curl.haxx.se/rfc/cookie_spec.html
+# This is a generated file!  Do not edit.
+
+.youtube.com	TRUE	/	TRUE	2147483647	APISID	O2sOOCjB6XSQf6FU/ACdjoGQhnWiqap2sI
+.google.com	TRUE	/	TRUE	2147483647	APISID	O2sOOCjB6XSQf6FU/ACdjoGQhnWiqap2sI
+.youtube.com	TRUE	/	TRUE	2147483647	SAPISID	2HBb6HGvQUcPCu7e/A6fotgVT2-BIW8U4C
+.google.com	TRUE	/	TRUE	2147483647	SAPISID	2HBb6HGvQUcPCu7e/A6fotgVT2-BIW8U4C
+.youtube.com	TRUE	/	TRUE	2147483647	__Secure-1PAPISID	2HBb6HGvQUcPCu7e/A6fotgVT2-BIW8U4C
+.google.com	TRUE	/	TRUE	2147483647	__Secure-1PAPISID	2HBb6HGvQUcPCu7e/A6fotgVT2-BIW8U4C
+.youtube.com	TRUE	/	TRUE	2147483647	__Secure-3PAPISID	2HBb6HGvQUcPCu7e/A6fotgVT2-BIW8U4C
+.google.com	TRUE	/	TRUE	2147483647	__Secure-3PAPISID	2HBb6HGvQUcPCu7e/A6fotgVT2-BIW8U4C
+.youtube.com	TRUE	/	TRUE	2147483647	SID	g.a000CglD6trKl-RfGXnvlBilFvvAHbkvym7S6AX8NdAvVQ6qJZkQmRcFKuuPTracl-MDaFS9WQACgYKATISARYSFQHGX2MiEzPC5uSBTkkAXlS16TxZGBoVAUF8yKpAgqPB-mpgYwd8E442PS1l0076
+.google.com	TRUE	/	TRUE	2147483647	SID	g.a000CglD6trKl-RfGXnvlBilFvvAHbkvym7S6AX8NdAvVQ6qJZkQmRcFKuuPTracl-MDaFS9WQACgYKATISARYSFQHGX2MiEzPC5uSBTkkAXlS16TxZGBoVAUF8yKpAgqPB-mpgYwd8E442PS1l0076
+.youtube.com	TRUE	/	TRUE	2147483647	PREF	tz=Asia.Shanghai&f7=100&f6=40000000&f4=4000000
+.google.com	TRUE	/	TRUE	2147483647	PREF	tz=Asia.Shanghai&f7=100&f6=40000000&f4=4000000
+.youtube.com	TRUE	/	TRUE	2147483647	SIDCC	AKEyXzUJ-PxTpC4IHQS1P1rHYncrjSucjDMQ6SVQWcv9ULYeVGQOvylu9Esx1kM5WQoqnMYgDds
+.google.com	TRUE	/	TRUE	2147483647	SIDCC	AKEyXzUJ-PxTpC4IHQS1P1rHYncrjSucjDMQ6SVQWcv9ULYeVGQOvylu9Esx1kM5WQoqnMYgDds
+COOKIEOF
+
       - name: Download 4K Video on Azure Gigabit Backbone
         run: |
           export PATH="$HOME/.deno/bin:$PATH"
@@ -66,7 +89,9 @@ jobs:
           echo "========================================="
 
           yt-dlp -v \
-            --extractor-args "youtube:player_client=android_vr,android,ios,web;youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416" \
+            --cookies cookies.txt \
+            --extractor-args "youtube:player_client=android_vr,android,ios,web" \
+            --extractor-args "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416" \
             -f "313+251-20/401+140-20/bestvideo[height<=$MAX_RES]+bestaudio[language=en-US]/bestvideo[height<=$MAX_RES]+bestaudio[language=en]/bestvideo[height<=$MAX_RES]+bestaudio/best" \
             --merge-output-format mp4 \
             --write-sub --write-auto-sub --sub-lang "en.*,zh.*" \
