@@ -6,7 +6,7 @@ on:
       video_url:
         description: "YouTube 视频 URL"
         required: true
-        default: "https://www.youtube.com/watch?v=dSUdGBhrO5k"
+        default: "https://www.youtube.com/watch?v=PztpR7JfbJE"
       resolution:
         description: "最高视频分辨率 (例如 2160 代表 4K, 1080 代表 1080p)"
         required: true
@@ -50,31 +50,73 @@ jobs:
 
       - name: Download 4K Video on Azure Gigabit Backbone (0 Proxy Traffic)
         run: |
-          echo "========================================="
-          echo "🚀 正在通过微软 Azure 万兆骨干网下载 4K 视频..."
-          echo "目标 URL: ${{ github.event.inputs.video_url || 'https://www.youtube.com/watch?v=dSUdGBhrO5k' }}"
-          echo "========================================="
-          mkdir -p output
-          
-          # 列出格式以供验证
-          yt-dlp \
-            $COOKIE_PARAM \
-            --remote-components ejs:github \
-            -F "${{ github.event.inputs.video_url || 'https://www.youtube.com/watch?v=dSUdGBhrO5k' }}" || true
-          
-          # 正式下载 4K 极清视频 + 最佳音轨 + 字幕 + 缩略图
-          yt-dlp \
-            $COOKIE_PARAM \
-            --remote-components ejs:github \
-            -f "bestvideo[height<=${{ github.event.inputs.resolution || '2160' }}]+bestaudio/bestvideo+bestaudio/best" \
-            --merge-output-format mp4 \
-            --write-sub --write-auto-sub --sub-lang "en.*,zh.*" \
-            --write-thumbnail \
-            -o "output/%(title)s.%(ext)s" \
-            "${{ github.event.inputs.video_url || 'https://www.youtube.com/watch?v=dSUdGBhrO5k' }}"
+          TARGET_URL="${{ github.event.inputs.video_url || 'https://www.youtube.com/watch?v=PztpR7JfbJE' }}"
+          MAX_RES="${{ github.event.inputs.resolution || '2160' }}"
 
           echo "========================================="
-          echo "✅ 下载完成！输出文件清单："
+          echo "🚀 正在通过微软 Azure 万兆骨干网下载 4K 视频..."
+          echo "目标 URL: $TARGET_URL"
+          echo "========================================="
+          mkdir -p output
+
+          # 策略 1：携带 Cookie 凭证优先下载
+          if [ -f cookies.txt ]; then
+            echo "👉 [策略 1] 携带 Cookie 凭证下载..."
+            yt-dlp \
+              --cookies cookies.txt \
+              --remote-components ejs:github \
+              -f "bestvideo[height<=$MAX_RES]+bestaudio/bestvideo+bestaudio/best" \
+              --merge-output-format mp4 \
+              --write-sub --write-auto-sub --sub-lang "en.*,zh.*" \
+              --write-thumbnail \
+              -o "output/%(title)s.%(ext)s" \
+              "$TARGET_URL" || true
+          fi
+
+          # 检查是否有 mp4 生成
+          if ls output/*.mp4 1> /dev/null 2>&1; then
+            echo "🎉 策略 1 下载成功！"
+          else
+            echo "⚠️ 策略 1 未完成（可能 Cookie 轮换），自动降级为 [策略 2] iOS+Web 多端直连..."
+            yt-dlp \
+              --remote-components ejs:github \
+              --extractor-args "youtube:player_client=ios,web" \
+              -f "bestvideo[height<=$MAX_RES]+bestaudio/bestvideo+bestaudio/best" \
+              --merge-output-format mp4 \
+              --write-sub --write-auto-sub --sub-lang "en.*,zh.*" \
+              --write-thumbnail \
+              -o "output/%(title)s.%(ext)s" \
+              "$TARGET_URL" || true
+          fi
+
+          # 策略 3：TV/Web 嵌入端点容灾
+          if ! ls output/*.mp4 1> /dev/null 2>&1; then
+            echo "⚠️ 自动降级为 [策略 3] TV/Web 嵌入端点..."
+            yt-dlp \
+              --remote-components ejs:github \
+              --extractor-args "youtube:player_client=tv_embedded,web" \
+              -f "bestvideo[height<=$MAX_RES]+bestaudio/bestvideo+bestaudio/best" \
+              --merge-output-format mp4 \
+              --write-sub --write-auto-sub --sub-lang "en.*,zh.*" \
+              --write-thumbnail \
+              -o "output/%(title)s.%(ext)s" \
+              "$TARGET_URL" || true
+          fi
+
+          # 策略 4：通用兜底最佳流
+          if ! ls output/*.mp4 1> /dev/null 2>&1; then
+            echo "⚠️ 自动降级为 [策略 4] 宽松无条件抓取..."
+            yt-dlp \
+              --remote-components ejs:github \
+              -f "best/bestvideo+bestaudio" \
+              --merge-output-format mp4 \
+              --write-thumbnail \
+              -o "output/%(title)s.%(ext)s" \
+              "$TARGET_URL"
+          fi
+
+          echo "========================================="
+          echo "✅ 下载流程结束！输出文件清单："
           ls -lh output/
           echo "========================================="
 
