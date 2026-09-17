@@ -37,14 +37,18 @@ jobs:
           sleep 3
           curl -s http://127.0.0.1:4416/ || echo "Container started"
 
-      - name: Install yt-dlp & POT Plugin & FFmpeg
+      - name: Install yt-dlp & POT Plugin & FFmpeg & Deno
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg curl
+          curl -fsSL https://deno.land/install.sh | sh
+          echo "$HOME/.deno/bin" >> $GITHUB_PATH
+          export PATH="$HOME/.deno/bin:$PATH"
           pip install --upgrade yt-dlp bgutil-ytdlp-pot-provider requests
 
       - name: Download 4K Video on Azure Gigabit Backbone
         run: |
+          export PATH="$HOME/.deno/bin:$PATH"
           TARGET_URL="${{ inputs.video_url }}"
           if [ -z "$TARGET_URL" ]; then
             TARGET_URL="https://www.youtube.com/watch?v=-x6S4aPnj-4"
@@ -62,6 +66,7 @@ jobs:
           echo "========================================="
 
           yt-dlp -v \
+            --extractor-args "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416" \
             -f "313+251-20/401+140-20/bestvideo[height<=$MAX_RES]+bestaudio[language=en-US]/bestvideo[height<=$MAX_RES]+bestaudio[language=en]/bestvideo[height<=$MAX_RES]+bestaudio/best" \
             --merge-output-format mp4 \
             --write-sub --write-auto-sub --sub-lang "en.*,zh.*" \
