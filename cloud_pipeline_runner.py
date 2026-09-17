@@ -5,7 +5,7 @@ Cloud Pipeline Runner - GitHub Actions 云端全自动双语视频压制与 B �
 实现从 YouTube 视频到 B 站审核置顶的 100% 微软云端全自动闭环（0 本地流量消耗）
 """
 
-import os, sys, glob, re, time, subprocess
+import os, sys, glob, re, time, shutil, subprocess
 import bilibili_cloud_publisher as bcp
 
 def parse_vtt(vtt_path):
@@ -32,7 +32,6 @@ def parse_vtt(vtt_path):
             text_lines = []
             i += 1
             while i < len(lines) and lines[i].strip():
-                # 过滤 HTML 标签如 <c> </c>
                 clean = re.sub(r"<[^>]+>", "", lines[i].strip())
                 if clean and not clean.startswith("NOTE"):
                     text_lines.append(clean)
@@ -54,8 +53,8 @@ def to_ass_time(ts):
     h = int(parts[0])
     m = int(parts[1])
     s, ms = parts[2].split(".")
-    cs = int(ms)[:2] if len(ms) >= 2 else int(ms.ljust(2, "0"))
-    return f"{h}:{m:02d}:{s}.{cs:02d}"
+    cs = ms[:2].ljust(2, "0")
+    return f"{h}:{m:02d}:{s}.{cs}"
 
 def translate_cues(cues):
     """智能批量翻译英文字幕为地道中文（严格单行 <= 16 字）"""
@@ -71,21 +70,28 @@ def translate_cues(cues):
         
     for idx, c in enumerate(cues):
         txt = c["text"]
-        # 简单短词
         if txt.lower() in ["[music]", "[applause]", "[laughter]"]:
             c["zh"] = "[音乐]" if "music" in txt.lower() else "[笑声]"
             continue
         try:
             zh = translator.translate(txt)
-            # 过滤多余标点
             zh = zh.rstrip("。，,.！!？?")
             c["zh"] = zh
         except Exception as e:
             c["zh"] = txt
-        if idx % 20 == 0:
+        if (idx + 1) % 20 == 0 or idx == len(cues) - 1:
             print(f"[Translate] 进度: {idx+1}/{len(cues)}")
     print("[Translate] 全部字幕翻译完成！")
     return cues
+
+def convert_hant_to_hans(text):
+    """尝试将繁体中文转化为简体中文"""
+    try:
+        import opencc
+        cc = opencc.OpenCC('t2s')
+        return cc.convert(text)
+    except:
+        return text
 
 def generate_ass(cues, ass_path, width=1920, height=1080):
     """
@@ -112,9 +118,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     events = []
     for c in cues:
-        zh = c.get("zh", "").strip()
+        zh = convert_hant_to_hans(c.get("zh", "").strip())
         en = c.get("text", "").strip()
-        # 控制单行长度
+        # 严格铁律：单行中文字数 <= 16，单行英文 <= 42 字符
         if len(zh) > 16:
             zh = zh[:16]
         if len(en) > 42:
@@ -135,7 +141,7 @@ def main():
     print("=========================================")
     
     # 1. 扫描 output 目录寻找下载好的视频与字幕
-    videos = glob.glob("output/*.mp4")
+    videos = [v for v in glob.glob("output/*.mp4") if "work_" not in v and "burned" not in v]
     if not videos:
         print("❌ 未在 output/ 目录找到 mp4 视频文件！")
         sys.exit(1)
@@ -156,7 +162,6 @@ def main():
         print(f"[Sub] 发现 YouTube 官方双语字幕: {zh_vtt} & {en_vtt}")
         zh_cues = parse_vtt(zh_vtt)
         en_cues = parse_vtt(en_vtt)
-        # 合并
         for i in range(min(len(zh_cues), len(en_cues))):
             cues.append({
                 "start": en_cues[i]["start"],
@@ -171,43 +176,51 @@ def main():
     else:
         print("[Sub] 未找到任何字幕，将直接发布原画视频。")
         
-    burned_video = "output/out_burned_final.mp4"
+    # 安全工作路径，杜绝 ffmpeg 因特殊字符/冒号报错
+    work_input = "output/work_input.mp4"
+    work_ass = "output/work_subtitles.ass"
+    work_burned = "output/work_burned.mp4"
+    
+    if os.path.exists(work_input): os.remove(work_input)
+    shutil.copyfile(raw_video, work_input)
+    
     if cues:
-        ass_path = "output/subtitles.ass"
-        generate_ass(cues, ass_path)
-        print("[Encode] 正在使用 Linux Runner 高性能压制双语母带...")
-        cmd = f"ffmpeg -i '{raw_video}' -vf \"ass='{ass_path}'\" -c:v libx264 -preset fast -crf 22 -c:a copy '{burned_video}' -y"
+        generate_ass(cues, work_ass)
+        print("[Encode] 正在使用 Linux Runner 4核算力高性能压制双语母带...")
+        cmd = f"ffmpeg -i '{work_input}' -vf \"ass='{work_ass}'\" -c:v libx264 -preset fast -crf 22 -c:a copy '{work_burned}' -y"
         subprocess.run(cmd, shell=True, check=True)
+        final_video = work_burned
     else:
-        burned_video = raw_video
+        final_video = work_input
         
     # 3. 寻找封面
     covers = glob.glob(f"{base_name}*.webp") + glob.glob(f"{base_name}*.jpg")
     cover_path = covers[0] if covers else ""
-    if cover_path and cover_path.endswith(".webp"):
-        jpg_cover = "output/cover.jpg"
-        subprocess.run(f"ffmpeg -i '{cover_path}' '{jpg_cover}' -y", shell=True)
-        cover_path = jpg_cover
+    work_cover = "output/work_cover.jpg"
+    if cover_path:
+        subprocess.run(f"ffmpeg -i '{cover_path}' '{work_cover}' -y", shell=True)
+        cover_path = work_cover
         
     # 4. 读取 B 站凭据并执行发布
     cookies = bcp.get_bilibili_cookies()
     print(f"🔑 B 站认证就绪，UID: {cookies.get('DedeUserID')}")
     
     cover_url = ""
-    if cover_path:
+    if cover_path and os.path.exists(cover_path):
         cover_url = bcp.upload_cover_image(cookies, cover_path)
         
-    upos_id = bcp.upos_upload_video(cookies, burned_video)
+    upos_id = bcp.upos_upload_video(cookies, final_video)
     
     # 提取标题
     title_raw = os.path.basename(raw_video).replace(".mp4", "")
-    title = f"【4K双语】{title_raw}"
+    title_clean = re.sub(r"[：:_-]+", " ", title_raw).strip()
+    title = f"【4K双语】{title_clean}"
     if len(title) > 75: title = title[:75]
     
     desc = (
         f"{title_raw}\n\n"
         "本视频由 GitHub Actions 微软云端全自动流水线 0 流量极速压制并发布！\n"
-        "画质：4K 极清双语原画母带（方正兰亭黑 + Avenir Next，同屏单行精炼排版）\n"
+        "画质：4K/1080p 极清双语原画母带（方正兰亭黑 + Avenir Next，同屏单行精炼排版）\n"
         "欢迎一键三连支持！"
     )
     tags = ["科技", "数码", "AppleWatch", "开箱", "苹果", "测评", "双语字幕", "4K"]
@@ -221,10 +234,10 @@ def main():
         cover_url,
         upos_id
     )
-    print(f"🎉 稿件已成功发布至 B 站！BVID: {bvid}")
+    print(f"🎉 稿件已成功发布至 B 站！BVID: {bvid} | AID: {aid}")
     
     pin_text = (
-        f"🍎《{title_raw}》全片 4K 极清双语母带已就绪！\n"
+        f"🍎《{title_clean}》全片 4K 极清双语母带已就绪！\n"
         "✨ 采用方正兰亭黑 + Avenir Next 现代科技字体等大平衡排版。\n"
         "感谢大家的观看与三连支持！"
     )
