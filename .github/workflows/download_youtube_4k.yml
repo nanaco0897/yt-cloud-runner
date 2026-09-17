@@ -26,24 +26,13 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install yt-dlp & FFmpeg & Deno
+      - name: Install Tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg curl
           pip install --upgrade yt-dlp requests
           curl -fsSL https://deno.land/install.sh | sh
           echo "$HOME/.deno/bin" >> $GITHUB_PATH
-
-      - name: Prepare YouTube Credentials
-        run: |
-          if [ -n "$YT_COOKIES" ]; then
-            printf "%s\n" "$YT_COOKIES" > cookies.txt
-            echo "COOKIE_PARAM=--cookies cookies.txt" >> $GITHUB_ENV
-          else
-            echo "COOKIE_PARAM=" >> $GITHUB_ENV
-          fi
-        env:
-          YT_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
 
       - name: Download 4K Video on Azure Gigabit Backbone
         run: |
@@ -52,12 +41,11 @@ jobs:
           mkdir -p output
 
           echo "========================================="
-          echo "🚀 微软 Azure 万兆骨干网极速拉取 4K 视频..."
+          echo "🚀 微软 Azure 万兆骨干网极速拉取 4K 视频 (纯净多端伪装，0 代理流量)..."
           echo "目标链接: $TARGET_URL"
           echo "========================================="
 
           yt-dlp \
-            $COOKIE_PARAM \
             --remote-components ejs:github \
             --extractor-args "youtube:player_client=ios,web,android" \
             -f "bestvideo[height<=$MAX_RES]+bestaudio/bestvideo+bestaudio/best" \
